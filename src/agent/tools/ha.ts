@@ -120,6 +120,60 @@ export const haTools: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'schedule_action',
+    description:
+      "Programme une action domotique à exécuter à un moment précis. Utilise le timestamp Unix pour définir l'heure d'exécution. Pour 'allume X pendant N minutes': appelle call_ha_service maintenant + schedule_action pour éteindre dans N*60 secondes.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        execute_at: {
+          type: 'number',
+          description: 'Timestamp Unix du moment d\'exécution (secondes depuis epoch)',
+        },
+        domain: {
+          type: 'string',
+          description: 'Domaine HA (light, switch, climate, etc.)',
+        },
+        service: {
+          type: 'string',
+          description: 'Service à appeler (turn_on, turn_off, etc.)',
+        },
+        data: {
+          type: 'object',
+          description: 'Données du service (entity_id, brightness, etc.)',
+        },
+        description: {
+          type: 'string',
+          description: 'Description lisible de l\'action (ex: "Éteindre lumière salon")',
+        },
+      },
+      required: ['execute_at', 'domain', 'service', 'data', 'description'],
+    },
+  },
+  {
+    name: 'list_scheduled_tasks',
+    description: 'Liste les actions planifiées en attente pour l\'utilisateur.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'cancel_scheduled_task',
+    description: 'Annule une action planifiée.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        task_id: {
+          type: 'number',
+          description: 'ID de la tâche à annuler (visible via list_scheduled_tasks)',
+        },
+      },
+      required: ['task_id'],
+    },
+  },
+  {
     name: 'get_entity_history',
     description:
       "Récupère l'historique des états d'une entité sur les dernières N heures. Utile pour voir les tendances de température, les activités récentes, etc.",
@@ -203,6 +257,39 @@ export async function executeTool(
         // Flatten and return last 50 state changes
         const entries = history.flat().slice(-50);
         return JSON.stringify(entries, null, 2);
+      }
+
+      case 'schedule_action': {
+        const id = db.addScheduledTask(
+          chatId,
+          input.execute_at as number,
+          input.domain as string,
+          input.service as string,
+          input.data as Record<string, unknown>,
+          input.description as string
+        );
+        const execDate = new Date((input.execute_at as number) * 1000).toLocaleString('fr-FR', {
+          timeZone: 'Europe/Paris',
+        });
+        return `Action planifiée (id: ${id}) pour le ${execDate}: ${input.description}`;
+      }
+
+      case 'list_scheduled_tasks': {
+        const tasks = db.getScheduledTasks(chatId);
+        if (tasks.length === 0) return 'Aucune action planifiée.';
+        return tasks
+          .map((t) => {
+            const date = new Date(t.executeAt * 1000).toLocaleString('fr-FR', {
+              timeZone: 'Europe/Paris',
+            });
+            return `[${t.id}] ${date} — ${t.description}`;
+          })
+          .join('\n');
+      }
+
+      case 'cancel_scheduled_task': {
+        const ok = db.cancelScheduledTask(input.task_id as number, chatId);
+        return ok ? 'Action annulée.' : 'Tâche introuvable ou déjà exécutée.';
       }
 
       case 'manage_alert': {

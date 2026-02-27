@@ -42,6 +42,19 @@ export class HADatabase {
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         PRIMARY KEY (chat_id, entity_id)
       );
+
+      CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id     INTEGER NOT NULL,
+        execute_at  INTEGER NOT NULL,
+        domain      TEXT    NOT NULL,
+        service     TEXT    NOT NULL,
+        data        TEXT    NOT NULL,
+        description TEXT    NOT NULL,
+        executed    INTEGER NOT NULL DEFAULT 0,
+        created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_tasks_pending ON scheduled_tasks(execute_at) WHERE executed = 0;
     `);
   }
 
@@ -126,4 +139,89 @@ export class HADatabase {
       .all() as { chat_id: number; entity_id: string }[];
     return rows.map((r) => ({ chatId: r.chat_id, entityId: r.entity_id }));
   }
+
+  // --- Tâches planifiées ---
+
+  addScheduledTask(
+    chatId: number,
+    executeAt: number,
+    domain: string,
+    service: string,
+    data: Record<string, unknown>,
+    description: string
+  ): number {
+    const result = this.db
+      .prepare(
+        `INSERT INTO scheduled_tasks (chat_id, execute_at, domain, service, data, description)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(chatId, executeAt, domain, service, JSON.stringify(data), description);
+    return result.lastInsertRowid as number;
+  }
+
+  getPendingTasks(now: number): ScheduledTask[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM scheduled_tasks
+         WHERE executed = 0 AND execute_at <= ?
+         ORDER BY execute_at ASC`
+      )
+      .all(now) as RawTask[];
+    return rows.map(toTask);
+  }
+
+  getScheduledTasks(chatId: number): ScheduledTask[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM scheduled_tasks
+         WHERE chat_id = ? AND executed = 0
+         ORDER BY execute_at ASC`
+      )
+      .all(chatId) as RawTask[];
+    return rows.map(toTask);
+  }
+
+  markTaskExecuted(id: number): void {
+    this.db.prepare('UPDATE scheduled_tasks SET executed = 1 WHERE id = ?').run(id);
+  }
+
+  cancelScheduledTask(id: number, chatId: number): boolean {
+    const result = this.db
+      .prepare('DELETE FROM scheduled_tasks WHERE id = ? AND chat_id = ? AND executed = 0')
+      .run(id, chatId);
+    return (result.changes as number) > 0;
+  }
+}
+
+interface RawTask {
+  id: number;
+  chat_id: number;
+  execute_at: number;
+  domain: string;
+  service: string;
+  data: string;
+  description: string;
+  executed: number;
+}
+
+export interface ScheduledTask {
+  id: number;
+  chatId: number;
+  executeAt: number;
+  domain: string;
+  service: string;
+  data: Record<string, unknown>;
+  description: string;
+}
+
+function toTask(r: RawTask): ScheduledTask {
+  return {
+    id: r.id,
+    chatId: r.chat_id,
+    executeAt: r.execute_at,
+    domain: r.domain,
+    service: r.service,
+    data: JSON.parse(r.data),
+    description: r.description,
+  };
 }

@@ -9,6 +9,8 @@ export function getSystemPrompt(): string {
     minute: '2-digit',
   });
 
+  const unixNow = Math.floor(Date.now() / 1000);
+
   return `Tu es un assistant domotique intelligent qui contrôle une maison via Home Assistant.
 
 Capacités:
@@ -30,5 +32,11 @@ Règles:
 - Pas de tableaux Markdown (non supportés) : utilise des listes à tirets à la place
 - Échappe les caractères spéciaux HTML dans le contenu : &amp; pour &, &lt; pour <, &gt; pour >
 
-Date et heure: ${now}`;
+Date et heure: ${now}
+Timestamp Unix actuel: ${unixNow}
+
+Pour les actions planifiées, calcule le timestamp Unix cible:
+- "dans 10 minutes" → ${unixNow} + 600 = ${unixNow + 600}
+- "dans 1 heure" → ${unixNow} + 3600
+- Une heure précise du jour = calcule à partir de l'heure actuelle ci-dessus`;
 }

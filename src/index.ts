@@ -23,6 +23,7 @@ async function main() {
   const bot = createBot(agent, db);
 
   setupAlerts(ha, bot, db);
+  startScheduler(ha, bot, db);
 
   await bot.launch();
   console.log('[HA Agent] Bot Telegram démarré.');
@@ -64,6 +65,39 @@ function setupAlerts(
 
   const count = db.getAllActiveAlerts().length;
   console.log(`[Alerts] ${count} alerte(s) active(s) au démarrage.`);
+}
+
+function startScheduler(
+  ha: HAClient,
+  bot: ReturnType<typeof createBot>,
+  db: HADatabase
+) {
+  const INTERVAL_MS = 15_000;
+
+  setInterval(async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const tasks = db.getPendingTasks(now);
+
+    for (const task of tasks) {
+      try {
+        await ha.callService(task.domain, task.service, task.data);
+        db.markTaskExecuted(task.id);
+        console.log(`[Scheduler] Tâche ${task.id} exécutée: ${task.description}`);
+        await bot.telegram.sendMessage(
+          task.chatId,
+          `Action effectuée: ${task.description}`
+        );
+      } catch (err) {
+        console.error(`[Scheduler] Erreur tâche ${task.id}:`, err);
+        await bot.telegram.sendMessage(
+          task.chatId,
+          `Erreur lors de l'exécution: ${task.description}`
+        ).catch(() => {});
+      }
+    }
+  }, INTERVAL_MS);
+
+  console.log(`[Scheduler] Démarré (vérification toutes les ${INTERVAL_MS / 1000}s).`);
 }
 
 main().catch((err) => {
