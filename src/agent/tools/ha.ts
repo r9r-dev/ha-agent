@@ -1,5 +1,12 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { HAClient } from '../../ha/client';
+import type { HADatabase } from '../../db';
+
+export interface ToolContext {
+  ha: HAClient;
+  db: HADatabase;
+  chatId: number;
+}
 
 export const haTools: Anthropic.Tool[] = [
   {
@@ -65,6 +72,54 @@ export const haTools: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'manage_alert',
+    description:
+      "Ajoute ou supprime une alerte proactive pour l'utilisateur. Quand une alerte est active, l'utilisateur reçoit un message automatique dès que l'état de l'entité change.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        entity_id: {
+          type: 'string',
+          description: "Identifiant de l'entité à surveiller",
+        },
+        action: {
+          type: 'string',
+          enum: ['add', 'remove'],
+          description: "'add' pour activer l'alerte, 'remove' pour la désactiver",
+        },
+      },
+      required: ['entity_id', 'action'],
+    },
+  },
+  {
+    name: 'list_alerts',
+    description: "Liste toutes les alertes actives configurées pour l'utilisateur.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'set_preference',
+    description:
+      "Mémorise une préférence ou information personnelle pour l'utilisateur (alias d'entités, nom d'une pièce, préférences de confort, etc.). Ces informations sont injectées dans le contexte à chaque conversation.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        key: {
+          type: 'string',
+          description: "Clé de la préférence (ex: 'alias_salon', 'temperature_preferee', 'nom')",
+        },
+        value: {
+          type: 'string',
+          description: 'Valeur à mémoriser',
+        },
+      },
+      required: ['key', 'value'],
+    },
+  },
+  {
     name: 'get_entity_history',
     description:
       "Récupère l'historique des états d'une entité sur les dernières N heures. Utile pour voir les tendances de température, les activités récentes, etc.",
@@ -88,8 +143,9 @@ export const haTools: Anthropic.Tool[] = [
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
-  ha: HAClient
+  ctx: ToolContext
 ): Promise<string> {
+  const { ha, db, chatId } = ctx;
   try {
     switch (name) {
       case 'get_entity_state': {
@@ -147,6 +203,26 @@ export async function executeTool(
         // Flatten and return last 50 state changes
         const entries = history.flat().slice(-50);
         return JSON.stringify(entries, null, 2);
+      }
+
+      case 'manage_alert': {
+        const entityId = input.entity_id as string;
+        const action = input.action as 'add' | 'remove';
+        db.setAlert(chatId, entityId, action === 'add');
+        return action === 'add'
+          ? `Alerte activée pour ${entityId}.`
+          : `Alerte désactivée pour ${entityId}.`;
+      }
+
+      case 'list_alerts': {
+        const alerts = db.getAlerts(chatId);
+        if (alerts.length === 0) return 'Aucune alerte active.';
+        return alerts.join('\n');
+      }
+
+      case 'set_preference': {
+        db.setPreference(chatId, input.key as string, input.value as string);
+        return `Préférence mémorisée: ${input.key} = ${input.value}`;
       }
 
       default:

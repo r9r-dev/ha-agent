@@ -1,5 +1,6 @@
 import { HAClient } from './ha/client';
 import { HAAgent } from './agent';
+import { HADatabase } from './db';
 import { createBot } from './bot/telegram';
 import { config } from './config';
 import type { HAEvent } from './ha/client';
@@ -7,10 +8,9 @@ import type { HAEvent } from './ha/client';
 async function main() {
   console.log('[HA Agent] Démarrage...');
 
-  // Init HA client
   const ha = new HAClient(config.ha.url, config.ha.token);
+  const db = new HADatabase();
 
-  // Verify HA connection
   try {
     const states = await ha.getStates();
     console.log(`[HA] Connecté. ${states.length} entités trouvées.`);
@@ -19,21 +19,11 @@ async function main() {
     process.exit(1);
   }
 
-  // Init agent
-  const agent = new HAAgent(ha);
+  const agent = new HAAgent(ha, db);
+  const bot = createBot(agent, db);
 
-  // Init Telegram bot
-  const bot = createBot(agent);
+  setupAlerts(ha, bot, db);
 
-  // Setup proactive alerts
-  if (
-    config.alerts.watchedEntities.length > 0 &&
-    config.alerts.notifyChatIds.length > 0
-  ) {
-    setupAlerts(ha, bot, config.alerts.watchedEntities, config.alerts.notifyChatIds);
-  }
-
-  // Launch bot (long polling)
   await bot.launch();
   console.log('[HA Agent] Bot Telegram démarré.');
 
@@ -44,25 +34,26 @@ async function main() {
 function setupAlerts(
   ha: HAClient,
   bot: ReturnType<typeof createBot>,
-  watchedEntities: string[],
-  notifyChatIds: number[]
+  db: HADatabase
 ) {
-  const watched = new Set(watchedEntities);
-
   ha.startEventListener('state_changed', async (event: HAEvent) => {
     if (event.event_type !== 'state_changed') return;
 
     const { entity_id, old_state, new_state } = event.data;
-    if (!entity_id || !watched.has(entity_id)) return;
+    if (!entity_id) return;
 
     const oldVal = old_state?.state ?? 'inconnu';
     const newVal = new_state?.state ?? 'inconnu';
     if (oldVal === newVal) return;
 
+    // Récupère dynamiquement tous les chats qui surveillent cette entité
+    const activeAlerts = db.getAllActiveAlerts().filter((a) => a.entityId === entity_id);
+    if (activeAlerts.length === 0) return;
+
     const name = (new_state?.attributes?.friendly_name as string) ?? entity_id;
     const msg = `Alerte domotique\n${name}: ${oldVal} → ${newVal}`;
 
-    for (const chatId of notifyChatIds) {
+    for (const { chatId } of activeAlerts) {
       try {
         await bot.telegram.sendMessage(chatId, msg);
       } catch (err) {
@@ -71,9 +62,8 @@ function setupAlerts(
     }
   });
 
-  console.log(
-    `[Alerts] Surveillance de ${watched.size} entité(s): ${[...watched].join(', ')}`
-  );
+  const count = db.getAllActiveAlerts().length;
+  console.log(`[Alerts] ${count} alerte(s) active(s) au démarrage.`);
 }
 
 main().catch((err) => {

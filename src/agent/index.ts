@@ -4,6 +4,7 @@ import { haTools, executeTool } from './tools/ha';
 import { getSystemPrompt } from './prompts';
 import { config } from '../config';
 import type { HAClient } from '../ha/client';
+import type { HADatabase } from '../db';
 
 const MAX_HISTORY = 10;
 const MAX_ITERATIONS = 10;
@@ -11,48 +12,52 @@ const MAX_ITERATIONS = 10;
 export class HAAgent {
   private anthropic: Anthropic;
   private ha: HAClient;
-  private history = new Map<number, MessageParam[]>();
+  private db: HADatabase;
 
-  constructor(ha: HAClient) {
+  constructor(ha: HAClient, db: HADatabase) {
     this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
     this.ha = ha;
-  }
-
-  private getHistory(chatId: number): MessageParam[] {
-    if (!this.history.has(chatId)) {
-      this.history.set(chatId, []);
-    }
-    return this.history.get(chatId)!;
+    this.db = db;
   }
 
   clearHistory(chatId: number): void {
-    this.history.delete(chatId);
+    this.db.clearHistory(chatId);
   }
 
   async chat(chatId: number, userMessage: string): Promise<string> {
-    const messages = this.getHistory(chatId);
-    messages.push({ role: 'user', content: userMessage });
+    const history = this.db.getHistory(chatId, MAX_HISTORY);
+    const existingCount = history.length;
+
+    history.push({ role: 'user', content: userMessage });
 
     try {
-      const reply = await this.runLoop(messages);
-      // Trim history to avoid bloating context
-      if (messages.length > MAX_HISTORY) {
-        messages.splice(0, messages.length - MAX_HISTORY);
-      }
+      const prefs = this.db.getPreferences(chatId);
+      const reply = await this.runLoop(history, chatId, prefs);
+      // Persist all new messages (user + tool calls + response)
+      this.db.appendMessages(chatId, history.slice(existingCount));
       return reply;
     } catch (error) {
-      // Remove the failed user message so history stays consistent
-      messages.pop();
       throw error;
     }
   }
 
-  private async runLoop(messages: MessageParam[]): Promise<string> {
+  private async runLoop(
+    messages: MessageParam[],
+    chatId: number,
+    prefs: Record<string, string>
+  ): Promise<string> {
+    const prefText = Object.entries(prefs)
+      .map(([k, v]) => `- ${k}: ${v}`)
+      .join('\n');
+    const system =
+      getSystemPrompt() +
+      (prefText ? `\n\nInformations mémorisées sur l'utilisateur:\n${prefText}` : '');
+
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       const response = await this.anthropic.messages.create({
         model: config.anthropic.model,
         max_tokens: 4096,
-        system: getSystemPrompt(),
+        system,
         tools: haTools,
         messages,
       });
@@ -71,18 +76,13 @@ export class HAAgent {
 
         for (const block of response.content) {
           if (block.type === 'tool_use') {
-            console.log(`[Agent] Tool call: ${block.name}`, block.input);
+            console.log(`[Agent] Tool: ${block.name}`, block.input);
             const result = await executeTool(
               block.name,
               block.input as Record<string, unknown>,
-              this.ha
+              { ha: this.ha, db: this.db, chatId }
             );
-            console.log(`[Agent] Tool result: ${result.slice(0, 100)}...`);
-            results.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: result,
-            });
+            results.push({ type: 'tool_result', tool_use_id: block.id, content: result });
           }
         }
 
@@ -90,7 +90,6 @@ export class HAAgent {
         continue;
       }
 
-      // stop_reason: 'max_tokens' or unexpected
       break;
     }
 

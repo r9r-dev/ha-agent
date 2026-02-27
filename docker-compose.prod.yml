@@ -11,5 +11,7 @@ services:
     image: ghcr.io/r9r-dev/ha-agent:${TAG:-latest}
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - ./data:/app/data
     # Si Home Assistant tourne sur la même machine en Docker:
     # network_mode: host
