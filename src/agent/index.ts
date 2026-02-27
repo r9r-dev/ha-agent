@@ -9,6 +9,24 @@ import type { HADatabase } from '../db';
 const MAX_HISTORY = 10;
 const MAX_ITERATIONS = 10;
 
+/**
+ * S'assure que l'historique commence toujours sur un message user classique (string),
+ * jamais sur un tool_result orphelin dont le tool_use correspondant aurait été coupé.
+ */
+function sanitizeHistory(messages: MessageParam[]): MessageParam[] {
+  for (let i = 0; i < messages.length; i++) {
+    const { role, content } = messages[i];
+    if (role === 'user') {
+      const isToolResult =
+        Array.isArray(content) &&
+        content.length > 0 &&
+        (content[0] as { type: string }).type === 'tool_result';
+      if (!isToolResult) return messages.slice(i);
+    }
+  }
+  return [];
+}
+
 export class HAAgent {
   private anthropic: Anthropic;
   private ha: HAClient;
@@ -25,7 +43,7 @@ export class HAAgent {
   }
 
   async chat(chatId: number, userMessage: string): Promise<string> {
-    const history = this.db.getHistory(chatId, MAX_HISTORY);
+    const history = sanitizeHistory(this.db.getHistory(chatId, MAX_HISTORY));
     const existingCount = history.length;
 
     history.push({ role: 'user', content: userMessage });
