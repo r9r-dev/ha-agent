@@ -1,0 +1,8 @@
+# Développement local — build depuis les sources
+services:
+  ha-agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    # Si Home Assistant tourne sur la même machine en Docker:
+    # network_mode: host

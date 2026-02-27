@@ -1,0 +1,15 @@
+# Production — utilise l'image publiée sur ghcr.io
+# Usage:
+#   TAG=42 docker compose -f docker-compose.prod.yml up -d   (version spécifique)
+#   docker compose -f docker-compose.prod.yml up -d          (latest)
+#
+# Mise à jour:
+#   docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d
+
+services:
+  ha-agent:
+    image: ghcr.io/r9r-dev/ha-agent:${TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    # Si Home Assistant tourne sur la même machine en Docker:
+    # network_mode: host
